@@ -1,0 +1,57 @@
+# Keeps the Kitchen Beta Apps Script project in step with the apps-script/ folder.
+# - Any change to apps-script/ on main is pushed to Apps Script (shows up on the /dev test link).
+#   It never makes a new live deployment.
+# - Run it by hand with "pull" to copy the current Apps Script code into this repo.
+# Needs the CLASPRC_JSON secret (the contents of .clasprc.json after `clasp login`).
+name: Apps Script
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps-script/*.gs', 'apps-script/*.html', 'apps-script/appsscript.json']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'pull = copy the code from Apps Script into the repo, push = send the repo code to Apps Script'
+        type: choice
+        options: [pull, push]
+        default: pull
+
+permissions:
+  contents: write
+
+concurrency: apps-script
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @google/clasp@2.4.2
+      - name: Sign in to Google
+        env:
+          CLASPRC: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC" ]; then echo "::error::Add the CLASPRC_JSON secret first"; exit 1; fi
+          printf '%s' "$CLASPRC" > ~/.clasprc.json
+      - name: Pull from Apps Script
+        if: github.event_name == 'workflow_dispatch' && inputs.action == 'pull'
+        working-directory: apps-script
+        run: |
+          clasp pull
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A .
+          git diff --cached --quiet || { git commit -m "Copy current code from Apps Script"; git push; }
+      - name: Push to Apps Script
+        if: github.event_name == 'push' || inputs.action == 'push'
+        working-directory: apps-script
+        run: |
+          # clasp push replaces the whole project, so never push a folder that hasn't been pulled yet.
+          for f in appsscript.json Code.gs Index.html; do
+            [ -f "$f" ] || { echo "::error::apps-script/$f is missing; run this workflow with pull first"; exit 1; }
+          done
+          clasp push --force
